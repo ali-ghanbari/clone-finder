@@ -1,0 +1,811 @@
+from abc import abstractmethod
+from copy import deepcopy
+from typing import List, Set
+
+
+class Term:
+    """
+    Base class representing a term in Gallina's AST.
+    """
+
+    @abstractmethod
+    def subst(self, var : 'Var', replacement : 'Var'):
+        """
+        Substitute occurrences of the specified variable with the replacement variable in the term.
+
+        Args:
+            var (Var): The variable to be replaced.
+            replacement (Var): The variable that will replace occurrences of the `var`.
+
+        Returns:
+            Term: A new Term instance with the substitution applied.
+
+        Raises:
+            NotImplementedError: If the method is not overridden by a subclass.
+        """
+        raise NotImplementedError('Not implemented')
+
+    @abstractmethod
+    def free_vars(self) -> Set['Var']:
+        """
+        Retrieve the set of free variables in the term.
+
+        Returns:
+            Set[Var]: A set containing all free variables present in the term.
+
+        Raises:
+            NotImplementedError: If the method is not overridden by a subclass.
+        """
+        raise NotImplementedError('Not implemented')
+
+    @abstractmethod
+    def alpha_equiv(self, other : 'Term') -> bool:
+        """
+        Check alpha equivalence with another term.
+
+        Alpha equivalence means that the two terms are identical up to a renaming
+        of bound variables.
+
+        Args:
+            other (Term): The other term to compare for alpha equivalence.
+
+        Returns:
+            bool: True if the terms are alpha equivalent, False otherwise.
+
+        Raises:
+            NotImplementedError: If the method is not overridden by a subclass.
+        """
+        raise NotImplementedError('Not implemented.')
+
+
+class Var(Term):
+    """
+       Represents a variable term in Gallina's AST.
+    """
+
+    def __init__(self, name : str):
+        """
+        Initialize a variable with a given name.
+
+        Args:
+            name (str): The name of the variable.
+        """
+        self.__name = name
+
+    def __eq__(self, other) -> bool:
+        """
+        Check if another Var is equal to this one based on its name.
+
+        Args:
+            other: The other object to compare.
+
+        Returns:
+            bool: True if the other object is a Var and has the same name.
+        """
+
+        if not isinstance(other, Var):
+            return False
+        return self.__name == other.__name
+
+    def __hash__(self) -> int:
+        """
+        Compute a hash value for the Var based on its name.
+
+        Returns:
+            int: The hash value of the name.
+        """
+
+        return hash(self.__name)
+
+    def subst(self, var : 'Var', replacement : 'Var'):
+        """
+        Substitute this variable with a replacement if it matches the given variable.
+
+        Args:
+            var (Var): The variable to be replaced.
+            replacement (Var): The variable that will replace.
+
+        Returns:
+            Term: A new Var instance representing the result of substitution,
+                  either the replacement or the original Var.
+        """
+        return replacement if self.__name == var.__name else self
+        # if self.__name == var.__name:
+        #     self.__name = replacement.__name
+
+    def free_vars(self) -> Set['Var']:
+        """
+        Retrieve the set of free variables, which is the Var itself.
+
+        Returns:
+            Set[Var]: A set containing this variable as the only free variable.
+        """
+        return {self}
+
+    def get_name(self) -> str:
+        """
+        Get the name of this variable.
+
+        Returns:
+            str: The name of the variable.
+        """
+        return self.__name
+
+    def alpha_equiv(self, other : Term) -> bool:
+        """
+        Check alpha equivalence with another term.
+
+        Args:
+            other (Term): The term to compare for alpha equivalence.
+
+        Returns:
+            bool: True if the other term is the same variable, False otherwise.
+        """
+        return isinstance(other, Var) and self.__name == other.__name
+
+
+class Pattern:
+    """
+    Represents a pattern in Gallina's AST, which may include a list of variable names
+    and an optional alias. Patterns facilitate destructuring expressions.
+    """
+    def __init__(self, names : List[Var], alias : Var = None):
+        """
+        Initialize a Pattern with given variable names and an optional alias.
+
+        Args:
+            names (List[Var]): The list of variable names in the pattern.
+            alias (Var, optional): An optional alias for the pattern. Default is None.
+        """
+        self.__names = names
+        self.__alias = alias
+
+    # def alpha_equiv(self, other : Term) -> bool:
+    #     if not isinstance(other, Pattern):
+    #         return False
+    #     return self.__names[0].alpha_equiv(other.__names[0])
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Pattern):
+            return False
+        return self.__names[0] == other.__names[0]
+
+    def __hash__(self) -> int:
+        return hash(self.__names[0])
+
+    def get_bound_vars(self) -> Set['Var']:
+        bvs = set()
+        if len(self.__names) > 1:
+            bvs.update(self.__names[1:])
+        if self.has_alias():
+            bvs.add(self.__alias)
+        return bvs
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set()
+        if len(self.__names) > 0 and self.__names[0].get_name() != '_':
+            fvs.add(self.__names[0])
+        return fvs
+
+    def get_names(self) -> List['Var']:
+        return self.__names
+
+    def has_alias(self) -> bool:
+        return self.__alias is not None
+
+    def get_alias(self) -> Var:
+        return self.__alias
+
+
+class CaseClause:
+    def __init__(self, patterns : List[Pattern], body : Term):
+        self.__patterns = patterns
+        self.__body = body
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, CaseClause):
+            return False
+        n = len(self.__patterns)
+        if n != len(other.__patterns):
+            return False
+        for i in range(n):
+            if self.__patterns[i] != other.__patterns[i]:
+                return False
+        return self.__body == other.__body
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, CaseClause):
+            return False
+        n = len(self.__patterns)
+        if n != len(other.__patterns):
+            return False
+        this_bvs = []
+        other_bvs = []
+        for i in range(n):
+            for bv in self.__patterns[i].get_bound_vars():
+                if bv.get_name() != '_':
+                    this_bvs.append(bv)
+            for bv in other.__patterns[i].get_bound_vars():
+                if bv.get_name() != '_':
+                    other_bvs.append(bv)
+        n = len(this_bvs)
+        if n != len(other_bvs):
+            return False
+        this_bvs.sort(key=lambda x: x.get_name())
+        other_bvs.sort(key=lambda x: x.get_name())
+        this_body = deepcopy(self.__body)
+        other_body = deepcopy(other.__body)
+        for i in range(n):
+            v = Var('SynthesizedVar#%d' % i)
+            this_body.subst(this_bvs[i], v)
+            other_body.subst(other_bvs[i], v)
+        return this_body == other_body
+
+    def __hash__(self) -> int:
+        return hash(tuple(self.__patterns))
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set(self.__body.free_vars())
+        for p in self.__patterns:
+            for bv in p.get_bound_vars():
+                if bv.get_name() != '_':
+                    fvs.discard(bv)
+        return fvs
+
+    def get_patterns(self) -> List[Pattern]:
+        return self.__patterns
+
+    def get_body(self) -> Term:
+        return self.__body
+
+
+class MatchSubject:
+    def __init__(self, term : Term, term_alias : Var = None, pattern : Pattern = None):
+        self.__term = term
+        self.__term_alias = term_alias
+        self.__pattern = pattern
+
+    def alpha_equiv(self, other: Term) -> bool:
+        if not isinstance(other, MatchSubject):
+            return False
+        return self.__term.alpha_equiv(other.__term)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, MatchSubject):
+            return False
+        return self.__term == other.__term
+
+    def get_bound_vars(self) -> Set['Var']:
+        bvs = set()
+        if self.has_term_alias():
+            bvs.add(self.__term_alias)
+        if self.has_pattern():
+            bvs.update(self.__pattern.get_bound_vars())
+        return bvs
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set(self.__term.free_vars())
+        fvs.update(self.__pattern.free_vars())
+        return fvs
+
+    def get_subject_term(self) -> Term:
+        return self.__term
+
+    def has_term_alias(self) -> bool:
+        return self.__term_alias is not None
+
+    def get_term_alias(self) -> Var:
+        return self.__term_alias
+
+    def has_pattern(self) -> bool:
+        return self.__pattern is not None
+
+    def get_pattern(self) -> Pattern:
+        return self.__pattern
+
+
+class Match(Term):
+    def __init__(self, subjects : List[MatchSubject], cases : List[CaseClause], ret_ty : Term = None):
+        self.__subjects = subjects
+        self.__ret_ty = ret_ty
+        self.__cases = cases
+
+    def __eq__(self, other):
+        if not isinstance(other, Match):
+            return False
+        if len(self.__cases) != len(other.__cases):
+            return False
+        this_cases = set(self.__cases)
+        other_cases = set(other.__cases)
+        if this_cases != other_cases:
+            return False
+        n = len(self.__subjects)
+        if n != len(other.__subjects):
+            return False
+        for i in range(n):
+            if self.__subjects[i] != other.__subjects[i]:
+                return False
+        if (self.__ret_ty is None) != (other.__ret_ty is None):
+            return False
+        if self.__ret_ty is None:
+            return True
+        return self.__ret_ty == other.__ret_ty
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, Match):
+            return False
+        if len(self.__cases) != len(other.__cases):
+            return False
+        this_cases = set(self.__cases)
+        other_cases = set(other.__cases)
+        if this_cases != other_cases:
+            return False
+        n = len(self.__subjects)
+        if n != len(other.__subjects):
+            return False
+        if (self.__ret_ty is None) != (other.__ret_ty is None):
+            return False
+        if self.__ret_ty is None:
+            return True
+        this_bvs = []
+        other_bvs = []
+        for i in range(n):
+            for bv in self.__subjects[i].get_bound_vars():
+                if bv.get_name() != '_':
+                    this_bvs.append(bv)
+            for bv in other.__subjects[i].get_bound_vars():
+                if bv.get_name() != '_':
+                    other_bvs.append(bv)
+        n = len(this_bvs)
+        if n != len(other_bvs):
+            return False
+        this_bvs.sort(key=lambda x: x.get_name())
+        other_bvs.sort(key=lambda x: x.get_name())
+        this_ret_ty = deepcopy(self.__ret_ty)
+        other_ret_ty = deepcopy(other.__ret_ty)
+        for i in range(n):
+            v = Var('SynthesizedVar#%d' % i)
+            this_ret_ty.subst(this_bvs[i], v)
+            other_ret_ty.subst(other_bvs[i], v)
+        return this_ret_ty == other_ret_ty
+
+    def subst(self, var: 'Var', replacement: 'Var'):
+        bvs = set()
+        for subject in self.__subjects:
+            bvs.update(subject.get_bound_vars())
+            subject.get_subject_term().subst(var, replacement)
+        if var not in bvs:
+            self.__ret_ty.subst(var, replacement)
+        for cc in self.__cases:
+            bvs = set()
+            for p in cc.get_patterns():
+                bvs.update(p.get_bound_vars())
+            if var not in bvs:
+                cc.get_body().subst(var, replacement)
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set()
+        if self.__ret_ty is not None:
+            fvs.update(self.__ret_ty.free_vars())
+            for subject in self.__subjects:
+                fvs.discard(subject.get_bound_vars())
+        for subject in self.__subjects:
+            fvs.update(subject.free_vars())
+        for case in self.__cases:
+            fvs.update(case.free_vars())
+        return fvs
+
+    def get_subjects(self) -> List[MatchSubject]:
+        return self.__subjects
+
+    def has_return_type(self) -> bool:
+        return self.__ret_ty is not None
+
+    def get_return_type(self) -> Term:
+        return self.__ret_ty
+
+    def get_cases(self) -> List[CaseClause]:
+        return self.__cases
+
+
+class Cond(Term):
+    def __init__(self, guard : Term, ret_ty : Term, then_branch : Term, else_branch : Term, guard_alias : Var = None):
+        super().__init__()
+        self.__guard = guard
+        self.__ret_ty = ret_ty
+        self.__then_branch = then_branch
+        self.__else_branch = else_branch
+        self.__guard_alias = guard_alias
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Cond):
+            return False
+        if self.__guard != other.__guard:
+            return False
+        has_guard_alias = self.has_guard_alias()
+        if has_guard_alias != other.has_guard_alias():
+            return False
+        if has_guard_alias and self.__ret_ty != other.__ret_ty:
+                return False
+        return self.__then_branch == other.__then_branch and self.__else_branch == other.__else_branch
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, Cond):
+            return False
+        if self.__guard != other.__guard:
+            return False
+        has_guard_alias = self.has_guard_alias()
+        if has_guard_alias != other.has_guard_alias():
+            return False
+        if has_guard_alias:
+            v = Var('SynthesizedVar#0')
+            this_ret_ty = deepcopy(self.__ret_ty)
+            this_ret_ty.subst(self.get_guard_alias(), v)
+            other_ret_ty = deepcopy(other.__ret_ty)
+            other_ret_ty.subst(other.get_guard_alias(), v)
+            if this_ret_ty != other_ret_ty:
+                return False
+        return self.__then_branch == other.__then_branch and self.__else_branch == other.__else_branch
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set()
+        fvs.update(self.__ret_ty.free_vars())
+        if self.__guard_alias is not None:
+            fvs.discard(self.__guard_alias)
+        fvs.update(self.__then_branch.free_vars())
+        fvs.update(self.__else_branch.free_vars())
+        return fvs
+
+    def subst(self, var: 'Var', replacement: 'Var'):
+        self.__then_branch.subst(var, replacement)
+        self.__else_branch.subst(var, replacement)
+        if self.__guard_alias is not None and self.__guard_alias != var:
+            self.__ret_ty.subst(var, replacement)
+
+    def get_guard(self) -> Term:
+        return self.__guard
+
+    def get_ret_ty(self) -> Term:
+        return self.__ret_ty
+
+    def get_then_branch(self) -> Term:
+        return self.__then_branch
+
+    def get_else_branch(self) -> Term:
+        return self.__else_branch
+
+    def has_guard_alias(self) -> bool:
+        return self.__guard_alias is not None
+
+    def get_guard_alias(self) -> Var:
+        return self.__guard_alias
+
+
+class Binder:
+    def __init__(self, names : List['Var'], ty : Term):
+        self.__names = names
+        self.__ty = ty
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Binder):
+            return False
+        return self.__names == other.__names and self.__ty == other.__ty
+
+    def get_names(self) -> List['Var']:
+        return self.__names
+
+    def get_type(self) -> Term:
+        return self.__ty
+
+    def free_vars(self) -> Set['Var']:
+        return set(self.__ty.free_vars())
+
+
+class Fix(Term):
+    def __init__(self, name : Var, params : List[Binder], ret_ty : Term, body : Term, struct : Var = None):
+        super().__init__()
+        self.__name = name
+        self.__params = params
+        self.__struct = struct
+        self.__ret_ty = ret_ty
+        self.__body = body
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Fix):
+            return False
+        n = len(self.__params)
+        if n != len(other.__params):
+            return False
+        for i in range(n):
+            if self.__params[i] != other.__params[i]:
+                return False
+        if self.__ret_ty != other.__ret_ty:
+            return False
+        if self.__struct is not None and self.__struct != other.__struct:
+            return False
+        return self.__body == other.__body
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, Fix):
+            return False
+        n = len(self.__params)
+        if n != len(other.__params):
+            return False
+        for i in range(n):
+            if self.__params[i].get_type() != other.__params[i].get_type():
+                return False
+        if self.__ret_ty != other.__ret_ty:
+            return False
+        this_fvs = []
+        other_fvs = []
+        this_fvs.append(self.__name)
+        other_fvs.append(other.__name)
+        for i in range(n):
+            for p in self.__params[i].get_names():
+                if p.get_name() != '_':
+                    this_fvs.append(p)
+            for p in other.__params[i].get_names():
+                if p.get_name() != '_':
+                    other_fvs.append(p)
+        n = len(this_fvs)
+        if n != len(other_fvs):
+            return False
+        this_fvs.sort(key=lambda x: x.get_name())
+        other_fvs.sort(key=lambda x: x.get_name())
+        this_body = deepcopy(self.__body)
+        other_body = deepcopy(other.__body)
+        for i in range(n):
+            v = Var('SynthesizedVar#%d' % i)
+            this_body.subst(this_fvs[i], v)
+            other_body.subst(other_fvs[i], v)
+        return this_body == other_body
+
+    def free_vars(self) -> Set['Var']:
+        param_types_fvs = set()
+        for p in self.__params:
+            param_types_fvs.update(p.free_vars())
+        for p in self.__params:
+            for n in p.get_names():
+                    param_types_fvs.discard(n)
+        body_fvs = set(self.__body.free_vars())
+        body_fvs.discard(self.__name)
+        for p in self.__params:
+            for n in p.get_names():
+                body_fvs.discard(n)
+        fvs = set(self.__ret_ty.free_vars())
+        fvs.update(param_types_fvs)
+        fvs.update(body_fvs)
+        return fvs
+
+    def subst(self, var: 'Var', replacement: 'Var'):
+        if self.__name == var:
+            return
+        params = set()
+        for p in self.__params:
+            params.update(p.get_names())
+        if var in params:
+            return
+        for p in self.__params:
+            p.get_type().subst(var, replacement)
+        self.__ret_ty.subst(var, replacement)
+        self.__body.subst(var, replacement)
+
+    def get_name(self) -> Var:
+        return self.__name
+
+    def get_params(self) -> List[Binder]:
+        return self.__params
+
+    def has_struct(self) -> bool:
+        return self.__struct is not None
+
+    def get_struct(self) -> Var:
+        return self.__struct
+
+    def get_return_type(self) -> Term:
+        return self.__ret_ty
+
+    def get_body(self) -> Term:
+        return self.__body
+
+
+class Sort(Term):
+    def __init__(self, name : str, annotation : str = None):
+        self.__name = name
+        self.__annotation = annotation
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Sort):
+            return False
+        if (self.__annotation is None) != (other.__annotation is None):
+            return False
+        if (self.__annotation is not None) and self.__annotation != other.__annotation:
+            return False
+        return self.__name == other.__name
+
+    def alpha_equiv(self, other : Term) -> bool:
+        return self == other
+
+    def subst(self, var: 'Var', replacement: 'Var'):
+        return
+
+    def free_vars(self) -> Set['Var']:
+        return set()
+
+    def get_name(self) -> str:
+        return self.__name + (self.__annotation if self.__annotation is not None else '')
+
+
+class TermAbstraction(Term):
+    def __init__(self, var : Var, var_type : Term, body : Term):
+        self._var = var
+        self._var_type = var_type
+        self._body = body
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, TermAbstraction):
+            return False
+        if self._var_type != other._var_type:
+            return False
+        return self._body == other._body
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, TermAbstraction):
+            return False
+        if not self._var_type.alpha_equiv(other._var_type):
+            return False
+        if self._var == other._var:
+            return self._body == other._body
+        v = Var('SynthesizedVar#0')
+        this_body = deepcopy(self._body)
+        this_body.subst(self._var, v)
+        other_body = deepcopy(other._body)
+        other_body.subst(other._var, v)
+        return this_body == other_body
+
+    def subst(self, var: 'Var', replacement: 'Var'):
+        self._var_type.subst(var, replacement)
+        if var != self._var:
+            self._body.subst(var, replacement)
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set(self._body.free_vars())
+        fvs.discard(self._var)
+        fvs.update(self._var_type.free_vars())
+        return fvs
+
+class Fun(TermAbstraction):
+    def __init__(self, param : Var, param_type : Term, body : Term):
+        super().__init__(param, param_type, body)
+
+    @staticmethod
+    def build(params: List[Binder], body : Term) -> 'Fun':
+        fun = body
+        i = len(params) - 1
+        while i >= 0:
+            names = params[i].get_names()
+            ty = params[i].get_type()
+            j = len(names) - 1
+            while j >= 0:
+                fun = Fun(names[j], ty, fun)
+                j -= 1
+            i -= 1
+        return fun
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Fun):
+            return False
+        return super().__eq__(other)
+
+
+class Product(TermAbstraction):
+    def __init__(self, param: Var, param_type: Term, body: Term):
+        super().__init__(param, param_type, body)
+
+    @staticmethod
+    def build(params: List[Binder], body: Term) -> 'Product':
+        fun = body
+        i = len(params) - 1
+        while i >= 0:
+            names = params[i].get_names()
+            ty = params[i].get_type()
+            j = len(names) - 1
+            while j >= 0:
+                fun = Product(names[j], ty, fun)
+                j -= 1
+            i -= 1
+        return fun
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, Product):
+            return False
+        return super().alpha_equiv(other)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Product):
+            return False
+        return super().__eq__(other)
+
+
+class Let(TermAbstraction):
+    def __init__(self, var : Var, var_type : Term, var_def : Term, body : Term):
+        super().__init__(var, var_type, body)
+        self.__var_def = var_def
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if not isinstance(other, Let):
+            return False
+        return super().alpha_equiv(other)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Let):
+            return False
+        return super().__eq__(other)
+
+    def subst(self, var: Var, replacement: Var):
+        super().subst(var, replacement)
+        self.__var_def.subst(var, replacement)
+
+    def free_vars(self) -> Set['Var']:
+        fvs = super().free_vars()
+        fvs.update(self.__var_def.free_vars())
+        return fvs
+
+
+class Cast(Term):
+    def __init__(self, term : Term, term_type : Term):
+        super().__init__()
+        self.__term = term
+        self.__term_type = term_type
+
+    def __eq__(self, other) -> bool:
+        if type(other) is not Cast:
+            return False
+        return self.__term == other.__term and self.__term_type == other.__term_type
+
+    def alpha_equiv(self, other : Term) -> bool:
+        if type(other) is not Cast:
+            return False
+        return self.__term.alpha_equiv(other.__term) and self.__term_type.alpha_equiv(other.__term_type)
+
+    def subst(self, var: Var, replacement: Var):
+        self.__term.subst(var, replacement)
+        self.__term_type.subst(var, replacement)
+        return self
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set(self.__term.free_vars())
+        fvs.update(self.__term_type.free_vars())
+        return fvs
+
+
+class App(Term):
+    def __init__(self, func : Term, arg : Term):
+        super().__init__()
+        self.__func = func
+        self.__arg = arg
+
+    def alpha_equiv(self, other) -> bool:
+        if not isinstance(other, App):
+            return False
+        return self.__func.alpha_equiv(other.__func) and self.__arg.alpha_equiv(other.__arg)
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, App):
+            return False
+        return self.__func == other.__func and self.__arg == other.__arg
+
+    def subst(self, var: Var, replacement: Var):
+        self.__func.subst(var, replacement)
+        self.__arg.subst(var, replacement)
+
+    def free_vars(self) -> Set['Var']:
+        fvs = set(self.__func.free_vars())
+        fvs.update(self.__arg.free_vars())
+        return fvs
+
+    def get_func(self) -> Term:
+        return self.__func
+
+    def get_arg(self) -> Term:
+        return self.__arg
